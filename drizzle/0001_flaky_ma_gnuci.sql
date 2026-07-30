@@ -1,0 +1,1 @@
+ALTER TABLE `activities` ADD `free_contact_names` text DEFAULT '[]' NOT NULL;
