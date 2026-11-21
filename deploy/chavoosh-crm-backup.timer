@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Chavoosh CRM backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Asia/Tehran
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

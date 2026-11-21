@@ -1,0 +1,28 @@
+[Unit]
+Description=Chavoosh CRM
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/chavoosh-crm/current
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/etc/chavoosh-crm/crm.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/chavoosh-crm /var/log/chavoosh-crm
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

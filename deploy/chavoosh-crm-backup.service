@@ -1,0 +1,16 @@
+[Unit]
+Description=Back up Chavoosh CRM data
+
+[Service]
+Type=oneshot
+User=deploy
+Group=deploy
+EnvironmentFile=/etc/chavoosh-crm/crm.env
+ExecStart=/opt/chavoosh-crm/current/deploy/backup.sh
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/chavoosh-crm
+ReadOnlyPaths=/var/lib/chavoosh-crm /opt/chavoosh-crm/current
