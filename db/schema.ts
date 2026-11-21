@@ -241,6 +241,7 @@ export const activities = sqliteTable(
     result: text("result").notNull().default(""),
     nextAction: text("next_action").notNull().default(""),
     nextActionAt: text("next_action_at"),
+    sourceActivityId: integer("source_activity_id"),
     freeContactNames: text("free_contact_names").notNull().default("[]"),
     assigneeUserId: integer("assignee_user_id").notNull().references(() => users.id),
     isManagerPrivate: integer("is_manager_private", { mode: "boolean" }).notNull().default(false),
@@ -253,6 +254,7 @@ export const activities = sqliteTable(
     index("activities_customer_idx").on(table.customerId),
     index("activities_assignee_idx").on(table.assigneeUserId),
     index("activities_starts_idx").on(table.startsAt),
+    uniqueIndex("activities_source_uq").on(table.sourceActivityId),
   ],
 );
 
@@ -269,7 +271,8 @@ export const documents = sqliteTable(
   "documents",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    customerId: integer("customer_id").notNull().references(() => customers.id),
+    // Kept nullable for backwards compatibility. New associations live in document_links.
+    customerId: integer("customer_id").references(() => customers.id),
     activityId: integer("activity_id").references(() => activities.id),
     opportunityId: integer("opportunity_id").references(() => opportunities.id),
     title: text("title").notNull(),
@@ -278,6 +281,9 @@ export const documents = sqliteTable(
     documentDate: text("document_date"),
     referenceNumber: text("reference_number").notNull().default(""),
     description: text("description").notNull().default(""),
+    visibility: text("visibility", { enum: ["public", "customer"] })
+      .notNull()
+      .default("public"),
     fileName: text("file_name").notNull(),
     objectKey: text("object_key").notNull(),
     contentType: text("content_type").notNull().default("application/octet-stream"),
@@ -288,7 +294,26 @@ export const documents = sqliteTable(
   },
   (table) => [
     index("documents_customer_idx").on(table.customerId),
+    index("documents_visibility_idx").on(table.visibility),
     uniqueIndex("documents_object_key_uq").on(table.objectKey),
+  ],
+);
+
+export const documentLinks = sqliteTable(
+  "document_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    documentId: integer("document_id").notNull().references(() => documents.id),
+    entityType: text("entity_type", { enum: ["customer", "activity", "opportunity"] }).notNull(),
+    entityId: integer("entity_id").notNull(),
+    customerId: integer("customer_id").notNull().references(() => customers.id),
+    createdBy: integer("created_by").notNull().references(() => users.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("document_links_entity_uq").on(table.documentId, table.entityType, table.entityId),
+    index("document_links_document_idx").on(table.documentId),
+    index("document_links_customer_idx").on(table.customerId),
   ],
 );
 

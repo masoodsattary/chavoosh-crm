@@ -94,7 +94,7 @@ export const workbookBackupTables: WorkbookBackupTable[] = [
     keyColumns: ["id"],
     columns: [
       "id", "customer_id", "activity_id", "opportunity_id", "title",
-      "document_type", "version", "document_date", "reference_number",
+      "document_type", "version", "document_date", "visibility", "reference_number",
       "description", "file_name", "object_key", "content_type", "size", "status",
       "uploaded_by", "created_at", "updated_at", "archived_at",
     ],

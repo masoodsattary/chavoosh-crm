@@ -63,8 +63,15 @@ export async function GET(_: Request, context: Context) {
                     a.opportunity_id AS opportunityId, a.title, a.type,
                     a.direction, a.status, a.starts_at AS startsAt,
                     a.duration_minutes AS durationMinutes, a.description,
-                    a.result, a.next_action AS nextAction,
-                    a.next_action_at AS nextActionAt,
+                    a.result,
+                    COALESCE(na.title, a.next_action) AS nextAction,
+                    COALESCE(na.starts_at, a.next_action_at) AS nextActionAt,
+                    a.source_activity_id AS sourceActivityId,
+                    sa.title AS sourceActivityTitle,
+                    na.id AS nextActivityId,
+                    na.status AS nextActivityStatus,
+                    na.assignee_user_id AS nextActionAssigneeUserId,
+                    nau.full_name AS nextActionAssigneeName,
                     a.free_contact_names AS freeContactNames,
                     a.assignee_user_id AS assigneeUserId,
                     u.full_name AS assigneeName,
@@ -80,6 +87,9 @@ export async function GET(_: Request, context: Context) {
                       WHERE ac.activity_id = a.id AND co.archived_at IS NULL
                     ), '') AS contactRefs
              FROM activities a JOIN users u ON u.id = a.assignee_user_id
+             LEFT JOIN activities sa ON sa.id = a.source_activity_id
+             LEFT JOIN activities na ON na.source_activity_id = a.id AND na.archived_at IS NULL
+             LEFT JOIN users nau ON nau.id = na.assignee_user_id
              WHERE a.customer_id = ? AND a.archived_at IS NULL
                AND (? = 1 OR a.is_manager_private = 0)
              ORDER BY a.starts_at DESC`,
@@ -105,15 +115,16 @@ export async function GET(_: Request, context: Context) {
           .all(),
         db
           .prepare(
-            `SELECT id, customer_id AS customerId, activity_id AS activityId,
-                    opportunity_id AS opportunityId, title,
-                    document_type AS documentType, version,
-                    document_date AS documentDate,
-                    reference_number AS referenceNumber, description,
-                    file_name AS fileName, content_type AS contentType, size,
-                    status, created_at AS createdAt
-             FROM documents WHERE customer_id = ? AND archived_at IS NULL
-             ORDER BY created_at DESC`,
+            `SELECT DISTINCT d.id, d.title,
+                    d.document_type AS documentType, d.version,
+                    d.visibility,
+                    d.document_date AS documentDate,
+                    d.reference_number AS referenceNumber, d.description,
+                    d.file_name AS fileName, d.content_type AS contentType, d.size,
+                    d.status, d.created_at AS createdAt
+             FROM documents d JOIN document_links dl ON dl.document_id = d.id
+             WHERE dl.customer_id = ? AND d.archived_at IS NULL
+             ORDER BY d.created_at DESC`,
           )
           .bind(customerId)
           .all(),

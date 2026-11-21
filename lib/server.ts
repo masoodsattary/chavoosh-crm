@@ -176,6 +176,15 @@ export async function recordEvent(args: {
   managerPrivate?: boolean;
 }) {
   const db = runtime().DB;
+  const managerEmailEvents = new Set([
+    "customer_created",
+    "customer_archived",
+    "opportunity_created",
+    "manager_note",
+    "manager_note_updated",
+    "manager_note_archived",
+  ]);
+  const emailManagers = managerEmailEvents.has(args.eventType) ? 1 : 0;
   const eventResult = await db
     .prepare(
       `INSERT INTO timeline_events
@@ -212,21 +221,32 @@ export async function recordEvent(args: {
            OR u.id IN (
              SELECT user_id FROM customer_watchers WHERE customer_id = ?
            )
+           OR (? = 1 AND u.role IN ('admin', 'sales_manager'))
          )`,
     )
-    .bind(args.user.id, customer?.owner_user_id ?? 0, args.customerId)
+    .bind(
+      args.user.id,
+      customer?.owner_user_id ?? 0,
+      args.customerId,
+      emailManagers,
+    )
     .all<{ id: number; email: string; role: string }>();
 
   const baseUrl = runtime().CRM_BASE_URL || "https://chavoosh-crm.masoodsattary.chatgpt.site";
   const subject = `[چاووش CRM] ${args.title} — ${customer?.name ?? "مشتری"}`;
   const safeTitle = escapeHtml(args.title);
   const safeSummary = escapeHtml(args.summary ?? "").replace(/\n/g, "<br>");
+  const watcherHint =
+    args.eventType === "customer_created"
+      ? `<p style="background:#f4f6ff;padding:10px 12px;border-radius:8px">اگر می‌خواهید رویدادهای بعدی مرتبط با این مشتری برای شما ایمیل شود، خود را در فهرست مشاهده‌کنندگان آن اضافه کنید.</p>`
+      : "";
   const html = `
     <div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;line-height:1.9;color:#17212b">
       <h2 style="color:#283980">${safeTitle}</h2>
       <p><strong>مشتری:</strong> ${escapeHtml(customer?.name ?? "")}</p>
       ${safeSummary ? `<p>${safeSummary}</p>` : ""}
       <p><strong>ثبت‌کننده:</strong> ${escapeHtml(args.user.fullName || args.user.email)}</p>
+      ${watcherHint}
       <p><a href="${baseUrl}/?customer=${args.customerId}&tab=timeline"
          style="background:#283980;color:white;padding:10px 16px;border-radius:8px;text-decoration:none">
          مشاهده در CRM

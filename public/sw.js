@@ -1,5 +1,12 @@
-const CACHE_NAME = "chavoosh-crm-shell-v1";
-const SHELL = ["/offline.html", "/favicon.svg"];
+const CACHE_NAME = "chavoosh-crm-shell-v2";
+const SHELL = [
+  "/offline.html",
+  "/favicon-32.png",
+  "/apple-touch-icon.png",
+  "/chavoosh-crm-icon-192.png",
+  "/chavoosh-crm-icon-512.png",
+  "/chavoosh-crm-icon-maskable-512.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)));

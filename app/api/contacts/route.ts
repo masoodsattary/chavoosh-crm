@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     await requireCustomerAccess(customerId, user, true);
     const firstName = cleanText(body.firstName, 100);
     const lastName = cleanText(body.lastName, 150);
-    if (!firstName && !lastName) throw new ApiError(400, "نام فرد الزامی است.");
+    if (!lastName) throw new ApiError(400, "نام خانوادگی الزامی است.");
     const email = cleanText(body.email, 200).toLowerCase();
     const mobile = cleanText(body.mobile, 50);
     const duplicate = await runtime().DB
@@ -99,6 +99,9 @@ export async function PATCH(request: Request) {
     if (!before) throw new ApiError(404, "فرد پیدا نشد.");
     const customerId = Number(before.customer_id);
     await requireCustomerAccess(customerId, user, true);
+    const firstName = cleanText(body.firstName ?? before.first_name, 100);
+    const lastName = cleanText(body.lastName ?? before.last_name, 150);
+    if (!lastName) throw new ApiError(400, "نام خانوادگی الزامی است.");
     await runtime().DB
       .prepare(
         `UPDATE contacts SET
@@ -110,8 +113,8 @@ export async function PATCH(request: Request) {
          WHERE id = ?`,
       )
       .bind(
-        cleanText(body.firstName ?? before.first_name, 100),
-        cleanText(body.lastName ?? before.last_name, 150),
+        firstName,
+        lastName,
         cleanText(body.prefix ?? before.prefix, 50),
         cleanText(body.jobTitle ?? before.job_title, 200),
         cleanText(body.department ?? before.department, 150),
@@ -138,7 +141,7 @@ export async function PATCH(request: Request) {
       user,
       eventType: "contact_updated",
       title: "اطلاعات فرد به‌روزرسانی شد",
-      summary: `${cleanText(body.firstName ?? before.first_name)} ${cleanText(body.lastName ?? before.last_name)}`,
+      summary: `${firstName} ${lastName}`.trim(),
       entityType: "contact",
       entityId: id,
     });

@@ -41,10 +41,30 @@ export async function POST(request: Request) {
     const assigneeUserId = optionalInt(body.assigneeUserId) ?? user.id;
     const nextAction = cleanText(body.nextAction, 1000);
     const nextActionAt = cleanText(body.nextActionAt, 60) || null;
+    const nextActionAssigneeUserId =
+      optionalInt(body.nextActionAssigneeUserId) ?? assigneeUserId;
     if (status === "completed" && Boolean(nextAction) !== Boolean(nextActionAt)) {
       throw new ApiError(400, "برای اقدام بعدی، عنوان و موعد را با هم وارد کنید.");
     }
-    const result = await runtime().DB
+    const contactIds = Array.isArray(body.contactIds)
+      ? [...new Set(body.contactIds.map(optionalInt).filter(Boolean) as number[])]
+      : [];
+    const nextActivityArgs =
+      status === "completed" && nextAction && nextActionAt
+        ? {
+            sourceActivityId: 0,
+            customerId,
+            opportunityId: optionalInt(body.opportunityId),
+            title: nextAction,
+            startsAt: nextActionAt,
+            assigneeUserId: nextActionAssigneeUserId,
+            contactIds,
+            freeContactNames: cleanNameArray(body.freeContactNames),
+            user,
+          }
+        : null;
+    const db = runtime().DB;
+    const mainInsert = db
       .prepare(
         `INSERT INTO activities (
           customer_id, opportunity_id, title, type, direction, status,
@@ -72,13 +92,18 @@ export async function POST(request: Request) {
         user.id,
         user.id,
         status === "completed" ? new Date().toISOString() : null,
-      )
-      .run();
-    const id = Number(result.meta.last_row_id);
+      );
+    const insertResults = await db.batch(
+      nextActivityArgs
+        ? [mainInsert, prepareNextActivityInsert(nextActivityArgs, true)]
+        : [mainInsert],
+    );
+    const id = Number(insertResults[0].meta.last_row_id);
+    const nextActivityId = nextActivityArgs
+      ? Number(insertResults[1].meta.last_row_id)
+      : null;
+    await syncDocumentLinks(id, customerId, body.documentIds, user.id);
 
-    const contactIds = Array.isArray(body.contactIds)
-      ? [...new Set(body.contactIds.map(optionalInt).filter(Boolean) as number[])]
-      : [];
     for (const contactId of contactIds) {
       await runtime().DB
         .prepare(
@@ -113,19 +138,11 @@ export async function POST(request: Request) {
       entityId: id,
       managerPrivate,
     });
-    let nextActivityId: number | null = null;
-    if (status === "completed" && nextAction && nextActionAt) {
-      nextActivityId = await createNextActivity({
-        customerId,
-        opportunityId: optionalInt(body.opportunityId),
-        title: nextAction,
-        startsAt: nextActionAt,
-        assigneeUserId:
-          optionalInt(body.nextActionAssigneeUserId) ?? assigneeUserId,
-        contactIds,
-        freeContactNames: cleanNameArray(body.freeContactNames),
-        user,
-      });
+    if (nextActivityArgs && nextActivityId) {
+      await finishNextActivity(
+        { ...nextActivityArgs, sourceActivityId: id },
+        nextActivityId,
+      );
     } else if (status === "planned") {
       await createActivityNotification({
         userId: assigneeUserId,
@@ -162,8 +179,17 @@ export async function PATCH(request: Request) {
     const nextAction = cleanText(body.nextAction ?? before.next_action, 1000);
     const nextActionAt =
       cleanText(body.nextActionAt ?? before.next_action_at, 60) || null;
-    const completingNow =
-      status === "completed" && String(before.status) !== "completed";
+    const linkedNext = await runtime().DB
+      .prepare(
+        `SELECT * FROM activities
+         WHERE source_activity_id = ? AND archived_at IS NULL`,
+      )
+      .bind(id)
+      .first<Record<string, unknown>>();
+    const nextActionAssigneeUserId =
+      optionalInt(body.nextActionAssigneeUserId) ??
+      optionalInt(linkedNext?.assignee_user_id) ??
+      assigneeUserId;
     const managerPrivate =
       body.isManagerPrivate === true
         ? true
@@ -176,10 +202,46 @@ export async function PATCH(request: Request) {
     ) {
       throw new ApiError(403, "فقط مدیران می‌توانند محرمانگی فعالیت را تغییر دهند.");
     }
-    if (completingNow && Boolean(nextAction) !== Boolean(nextActionAt)) {
+    if (status === "completed" && Boolean(nextAction) !== Boolean(nextActionAt)) {
       throw new ApiError(400, "برای اقدام بعدی، عنوان و موعد را با هم وارد کنید.");
     }
-    await runtime().DB
+    if (status === "completed" && linkedNext && (!nextAction || !nextActionAt)) {
+      throw new ApiError(
+        409,
+        "اقدام بعدیِ مرتبط از قبل ساخته شده است؛ آن را از رکورد خودش لغو یا ویرایش کنید.",
+      );
+    }
+    if (
+      linkedNext &&
+      linkedNext.status !== "planned" &&
+      (nextAction !== cleanText(linkedNext.title, 1000) ||
+        nextActionAt !== (cleanText(linkedNext.starts_at, 60) || null) ||
+        nextActionAssigneeUserId !== Number(linkedNext.assignee_user_id))
+    ) {
+      throw new ApiError(
+        409,
+        "اقدام بعدی انجام یا لغو شده و برای حفظ سابقه دیگر از فعالیت مبدأ قابل تغییر نیست.",
+      );
+    }
+    const pendingNextArgs =
+      status === "completed" && nextAction && nextActionAt && !linkedNext
+        ? {
+            sourceActivityId: id,
+            customerId,
+            opportunityId: optionalInt(
+              body.opportunityId ?? before.opportunity_id,
+            ),
+            title: nextAction,
+            startsAt: nextActionAt,
+            assigneeUserId: nextActionAssigneeUserId,
+            contactIds: [] as number[],
+            freeContactNames: cleanNameArray(
+              body.freeContactNames ?? safeNameArray(before.free_contact_names),
+            ),
+            user,
+          }
+        : null;
+    const updateStatement = runtime().DB
       .prepare(
         `UPDATE activities SET
           title = ?, type = ?, direction = ?, status = ?, starts_at = ?,
@@ -208,8 +270,17 @@ export async function PATCH(request: Request) {
         status === "completed" ? new Date().toISOString() : null,
         user.id,
         id,
-      )
-      .run();
+      );
+    let nextActivityId: number | null = null;
+    if (pendingNextArgs) {
+      const writeResults = await runtime().DB.batch([
+        updateStatement,
+        prepareNextActivityInsert(pendingNextArgs),
+      ]);
+      nextActivityId = Number(writeResults[1].meta.last_row_id);
+    } else {
+      await updateStatement.run();
+    }
     if (Array.isArray(body.contactIds)) {
       await runtime().DB
         .prepare("DELETE FROM activity_contacts WHERE activity_id = ?")
@@ -228,6 +299,10 @@ export async function PATCH(request: Request) {
           .bind(id, contactId, customerId)
           .run();
       }
+    }
+    if (Array.isArray(body.documentIds)) {
+      await runtime().DB.prepare("DELETE FROM document_links WHERE entity_type = 'activity' AND entity_id = ?").bind(id).run();
+      await syncDocumentLinks(id, customerId, body.documentIds, user.id);
     }
     const contactIds = await runtime().DB
       .prepare(
@@ -250,23 +325,44 @@ export async function PATCH(request: Request) {
       entityId: id,
       managerPrivate,
     });
-    let nextActivityId: number | null = null;
-    if (completingNow && nextAction && nextActionAt) {
-      nextActivityId = await createNextActivity({
-        customerId,
-        opportunityId: optionalInt(
-          body.opportunityId ?? before.opportunity_id,
-        ),
-        title: nextAction,
-        startsAt: nextActionAt,
-        assigneeUserId:
-          optionalInt(body.nextActionAssigneeUserId) ?? assigneeUserId,
-        contactIds: contactIds.results.map((item) => item.contactId),
-        freeContactNames: cleanNameArray(
-          body.freeContactNames ?? safeNameArray(before.free_contact_names),
-        ),
-        user,
-      });
+    if (pendingNextArgs && nextActivityId) {
+      await finishNextActivity(
+        {
+          ...pendingNextArgs,
+          contactIds: contactIds.results.map((item: { contactId: number }) =>
+            item.contactId,
+          ),
+        },
+        nextActivityId,
+      );
+    } else if (linkedNext && linkedNext.status === "planned" && nextAction && nextActionAt) {
+      await runtime().DB
+        .prepare(
+          `UPDATE activities SET title = ?, starts_at = ?, description = ?,
+             assignee_user_id = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND status = 'planned' AND archived_at IS NULL`,
+        )
+        .bind(
+          nextAction,
+          nextActionAt,
+          `اقدام بعدی: ${nextAction}`,
+          nextActionAssigneeUserId,
+          user.id,
+          Number(linkedNext.id),
+        )
+        .run();
+      nextActivityId = Number(linkedNext.id);
+      if (nextActionAssigneeUserId !== Number(linkedNext.assignee_user_id)) {
+        await createActivityNotification({
+          userId: nextActionAssigneeUserId,
+          customerId,
+          activityId: Number(linkedNext.id),
+          kind: "assignment",
+          title: "اقدام به شما واگذار شد",
+          body: `${nextAction} — ${nextActionAt}`,
+          dedupeKey: `activity:${linkedNext.id}:assignment:${nextActionAssigneeUserId}`,
+        });
+      }
     } else if (
       status === "planned" &&
       assigneeUserId !== Number(before.assignee_user_id)
@@ -285,6 +381,19 @@ export async function PATCH(request: Request) {
     return Response.json({ ok: true, nextActivityId });
   } catch (error) {
     return jsonError(error);
+  }
+}
+
+async function syncDocumentLinks(activityId: number, customerId: number, raw: unknown, actorId: number) {
+  if (!Array.isArray(raw)) return;
+  for (const value of [...new Set(raw.map(optionalInt).filter(Boolean) as number[])]) {
+    await runtime().DB.prepare(`INSERT OR IGNORE INTO document_links (document_id, entity_type, entity_id, customer_id, created_by)
+      SELECT d.id, 'activity', ?, ?, ? FROM documents d
+      WHERE d.id = ? AND d.archived_at IS NULL AND (
+        d.visibility = 'public' OR EXISTS (
+          SELECT 1 FROM document_links dl WHERE dl.document_id = d.id AND dl.customer_id = ?
+        )
+      )`).bind(activityId, customerId, actorId, value, customerId).run();
   }
 }
 
@@ -356,38 +465,61 @@ function safeNameArray(value: unknown) {
   }
 }
 
-async function createNextActivity(args: {
-  customerId: number;
-  opportunityId: number | null;
-  title: string;
-  startsAt: string;
-  assigneeUserId: number;
-  contactIds: number[];
-  freeContactNames: string[];
-  user: AppUser;
-}) {
-  const result = await runtime().DB
+function prepareNextActivityInsert(
+  args: {
+    sourceActivityId: number;
+    customerId: number;
+    opportunityId: number | null;
+    title: string;
+    startsAt: string;
+    assigneeUserId: number;
+    contactIds: number[];
+    freeContactNames: string[];
+    user: AppUser;
+  },
+  sourceFromPreviousInsert = false,
+) {
+  const sourceValue = sourceFromPreviousInsert ? "last_insert_rowid()" : "?";
+  const values: Array<string | number | null> = [
+    args.customerId,
+    args.opportunityId,
+  ];
+  if (!sourceFromPreviousInsert) values.push(args.sourceActivityId);
+  values.push(
+    args.title,
+    args.startsAt,
+    `اقدام بعدی: ${args.title}`,
+    JSON.stringify(args.freeContactNames),
+    args.assigneeUserId,
+    args.user.id,
+    args.user.id,
+  );
+  return runtime().DB
     .prepare(
       `INSERT INTO activities (
-        customer_id, opportunity_id, title, type, direction, status,
+        customer_id, opportunity_id, source_activity_id, title, type, direction, status,
         starts_at, duration_minutes, description, result, next_action,
         next_action_at, free_contact_names, assignee_user_id, is_manager_private,
         created_by, updated_by, completed_at
-      ) VALUES (?, ?, ?, 'follow_up', 'outbound', 'planned', ?, 0, ?, '', '', NULL, ?, ?, 0, ?, ?, NULL)`,
+      ) VALUES (?, ?, ${sourceValue}, ?, 'follow_up', 'outbound', 'planned', ?, 0, ?, '', '', NULL, ?, ?, 0, ?, ?, NULL)`,
     )
-    .bind(
-      args.customerId,
-      args.opportunityId,
-      args.title,
-      args.startsAt,
-      `اقدام بعدی: ${args.title}`,
-      JSON.stringify(args.freeContactNames),
-      args.assigneeUserId,
-      args.user.id,
-      args.user.id,
-    )
-    .run();
-  const id = Number(result.meta.last_row_id);
+    .bind(...values);
+}
+
+async function finishNextActivity(
+  args: {
+    sourceActivityId: number;
+    customerId: number;
+    opportunityId: number | null;
+    title: string;
+    startsAt: string;
+    assigneeUserId: number;
+    contactIds: number[];
+    freeContactNames: string[];
+    user: AppUser;
+  },
+  id: number,
+) {
   for (const contactId of args.contactIds) {
     await runtime().DB
       .prepare(
@@ -399,6 +531,7 @@ async function createNextActivity(args: {
       .run();
   }
   await recordAudit(args.user, "activity", id, "create_follow_up", "", {
+    sourceActivityId: args.sourceActivityId,
     title: args.title,
     startsAt: args.startsAt,
     assigneeUserId: args.assigneeUserId,
@@ -421,5 +554,4 @@ async function createNextActivity(args: {
     body: `${args.title} — ${args.startsAt}`,
     dedupeKey: `activity:${id}:assignment:${args.assigneeUserId}`,
   });
-  return id;
 }

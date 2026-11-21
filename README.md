@@ -1,124 +1,108 @@
-# Chavoosh CRM
+# vinext-starter
 
-سامانه داخلی مدیریت ارتباط با مشتریان چاووش، با رابط فارسی و راست‌چین، تاریخ
-شمسی و قابلیت نصب به‌صورت PWA.
+A clean full-stack starter running on
+[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
+Drizzle support.
 
-نسخه فعال: <https://chavoosh-crm.masoodsattary.chatgpt.site>
-
-## قابلیت‌های اصلی
-
-- حساب مشتری، تگ‌های گروه‌بندی، مسئول حساب و مشاهده‌کنندگان
-- افراد و اطلاعات تماس مرتبط با هر مشتری
-- فعالیت‌ها، جلسات، مکاتبات، اقدامات آینده و تایم‌لاین
-- فرصت‌های فروش با مبلغ، ارز، احتمال، پیش‌بینی و مراحل اختصاصی
-- اسناد متصل به مشتری، فعالیت یا فرصت در Cloudflare R2
-- مشتری خصوصی و یادداشت مخصوص مدیران
-- اعلان داخلی، دعوت کاربر و بازیابی رمز با Resend
-- جست‌وجوی سراسری
-- خروجی جامع Excel و دریافت مجدد اطلاعات
-- حذف نرم، ثبت رویداد و Audit Log
-- طراحی Mobile First، PWA و پشتیبانی از منطقه زمانی کاربر
-
-## فناوری‌ها
-
-- Vinext / Next-compatible App Router
-- React 19 و TypeScript
-- Cloudflare Worker
-- Cloudflare D1 و Drizzle ORM
-- Cloudflare R2
-- Resend
-- jalaali-js
-
-## پیش‌نیازها
+## Prerequisites
 
 - Node.js `>=22.13.0`
-- npm
-- محیط Linux یا WSL برای اجرای اسکریپت‌های build
+- Linux with `flock`, `curl`, and GNU `timeout`
 
-## نصب و اجرای محلی
+## Sites Lifecycle
 
-```bash
-git clone https://github.com/masoodsattary/chavoosh-crm.git
-cd chavoosh-crm
-npm ci
-cp .env.example .env.local
-npm run dev
+The Sites lifecycle CLI runs the locked dependency install before returning this checkout. Edit the source under `app/`, then checkpoint when a coherent milestone is ready to inspect or share. The remote Sites builder runs `npm run build` against the pushed commit. Do not repeat install or build as a normal pre-checkpoint step.
+
+This starter does not use `wrangler.jsonc`.
+
+`install:ci` is intentionally a single, non-retrying `npm ci`. It refuses a concurrent install for the same project, consumes a matching image-seeded npm cache with `--prefer-offline` while retaining registry fallback for a missing cache object, otherwise downloads and verifies the complete vinext tarball recorded in `package-lock.json`, limits npm to one socket, and terminates a stalled install. `build` applies a short timeout and then validates the Sites artifact. These helpers target Linux and use GNU `timeout`; they are not native macOS scripts.
+
+Scripts that need writable project-scoped home, npm, XDG, and temporary paths use `scripts/sites-env.sh`. The `dev` and `start` scripts honor the caller's runtime environment and keep Wrangler logs inside the checkout. The generated `.sites-runtime/` directory is disposable and ignored by Git.
+
+## Included Shape
+
+- edit site code under `app/`
+- `app/chatgpt-auth.ts` provides optional dispatch-owned ChatGPT sign-in helpers
+- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
+- `vite.config.ts` simulates declared bindings for local development
+- `db/index.ts` reads the D1 binding from the Cloudflare Worker environment
+- `db/schema.ts` starts intentionally empty
+- `examples/d1/` contains an optional D1 example surface
+- `drizzle.config.ts` supports local migration generation when needed
+
+## Workspace Auth Headers
+
+OpenAI workspace sites can read the current user's email from
+`oai-authenticated-user-email`.
+
+SIWC-authenticated workspace sites may also receive
+`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
+`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
+`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
+
+Treat the full name as optional and fall back to email when it is absent:
+
+```tsx
+import { headers } from "next/headers";
+
+export default async function Home() {
+  const requestHeaders = await headers();
+  const email = requestHeaders.get("oai-authenticated-user-email");
+  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
+  const fullName =
+    encodedFullName &&
+    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
+      "percent-encoded-utf-8"
+      ? decodeURIComponent(encodedFullName)
+      : null;
+
+  const displayName = fullName ?? email;
+  // ...
+}
 ```
 
-سرور توسعه توسط Vite اجرا می‌شود. تنظیمات محلی D1 و R2 در
-`vite.config.ts` شبیه‌سازی می‌شوند.
+## Optional Dispatch-Owned ChatGPT Sign-In
 
-## دستورات
+Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
+optional or required ChatGPT sign-in:
 
-```bash
-npm run dev               # اجرای توسعه
-npm run lint              # کنترل کیفیت کد
-npm test                  # build، اعتبارسنجی artifact و تست
-npm run build             # ساخت نسخه Cloudflare Worker
-npm run validate:artifact # بررسی مجدد خروجی build
-npm run db:generate       # تولید migration جدید از schema
-```
+- Use `getChatGPTUser()` for optional signed-in UI.
+- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
+  anonymous visitors through Sign in with ChatGPT.
+- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
+  browser links or actions.
+- Pass a same-origin relative `returnTo` path for the destination after sign-in
+  or sign-out. The helper validates and safely encodes it.
+- Mark protected pages with `export const dynamic = "force-dynamic"` because
+  they depend on per-request identity headers.
 
-## دیتابیس
+Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
+OAuth cookies, and identity header injection. Do not implement app routes for
+those reserved paths. Routes that do not import and call the helper remain
+anonymous-compatible.
 
-ساختار دیتابیس در `db/schema.ts` و migrationهای قابل تکرار در پوشه
-`drizzle/` قرار دارند. فایل‌های `drizzle/meta/` تاریخچه و snapshotهای Drizzle
-را نگه می‌دارند.
+SIWC establishes identity only; it does not prove workspace membership. Use the
+Sites hosting platform's access policy controls for workspace-wide restrictions,
+or enforce explicit server-side membership or allowlist checks.
 
-در محیط جدید:
+Use SIWC for account pages, user-specific dashboards, saved records, and write
+actions tied to the current ChatGPT user. Leave public content anonymous.
 
-1. یک D1 database ایجاد کنید.
-2. migrationها را به ترتیب شماره اجرا کنید.
-3. binding آن را با نام `DB` در محیط Worker تنظیم کنید.
-4. یک R2 bucket ایجاد و با نام `BUCKET` bind کنید.
+## Diagnostic Commands
 
-فایل GitHub شامل داده زنده D1 یا محتوای bucket نیست. خروجی دیتابیس و R2 باید
-جداگانه و رمزگذاری‌شده پشتیبان‌گیری شوند.
+- `npm run install:ci`: perform the one bounded lockfile install
+- `npm run dev`: start the Vite/Vinext development server
+- `npm run build`: build and validate the deployable Sites artifact
+- `npm run start`: start the built Vinext application
+- `npm test`: build, validate, and verify the rendered development-preview metadata
+- `npm run validate:artifact`: recheck an existing artifact's manifest and ESM `default.fetch` export
+- `npm run db:generate`: generate Drizzle migrations after schema changes
 
-## متغیرهای محیطی
+Use build and validation commands for targeted diagnosis after a remote failure, not as part of the normal checkpoint path.
 
-مقادیر موردنیاز در `.env.example` مستند شده‌اند:
+The timeout defaults can be overridden for a controlled canary with `SITES_INSTALL_TIMEOUT`, `SITES_INSTALL_KILL_AFTER`, `SITES_BUILD_TIMEOUT`, and `SITES_BUILD_KILL_AFTER`. A timeout fails the command; the helpers never retry an unchanged install or build.
 
-```dotenv
-RESEND_API_KEY=
-CRM_FROM_EMAIL=crm@notify.example.com
-```
+## Learn More
 
-مقادیر واقعی را فقط در Environment Variables سرویس استقرار یا GitHub Secrets
-قرار دهید. فایل‌های `.env*` به‌جز `.env.example` در Git نادیده گرفته می‌شوند.
-
-## استقرار با ChatGPT Sites
-
-فایل `.openai/hosting.json` اتصال پروژه به Site فعلی و bindingهای D1/R2 را
-تعریف می‌کند. انتشار عملیاتی همچنان باید از چرخه ChatGPT Sites انجام شود تا
-منابع مدیریت‌شده و دسترسی‌ها حفظ شوند.
-
-وجود این فایل به‌معنی وجود credential در repository نیست؛ شناسه پروژه و نام
-bindingها secret محسوب نمی‌شوند.
-
-## پشتیبان‌گیری
-
-برای بازیابی کامل سه جزء لازم است:
-
-1. این repository برای سورس، تنظیمات، assets و migrationها
-2. خروجی D1 برای اطلاعات ساخت‌یافته
-3. آرشیو R2 برای فایل‌های بارگذاری‌شده
-
-خروجی Excel داخل CRM یک خروجی کامل اطلاعات تجاری و metadata اسناد است، اما
-محتوای باینری فایل‌های R2 و اطلاعات امنیتی کاربران را شامل نمی‌شود.
-
-## امنیت
-
-- هیچ API key، رمز، session یا token نباید commit شود.
-- کلیدهای افشاشده باید فوراً revoke و جایگزین شوند.
-- repository باید Private باقی بماند.
-- قبل از استقرار، متغیرهای محیطی مقصد و سیاست دسترسی Site را بازبینی کنید.
-
-## CI
-
-Workflow موجود در `.github/workflows/ci.yml` در هر push و pull request موارد
-زیر را اجرا می‌کند:
-
-- نصب دقیق dependencyها از lock file
-- lint
-- build و تست
+- [vinext Documentation](https://github.com/cloudflare/vinext)
+- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)

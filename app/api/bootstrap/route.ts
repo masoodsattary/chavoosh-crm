@@ -111,8 +111,15 @@ export async function GET() {
                     a.opportunity_id AS opportunityId, a.title, a.type,
                     a.status, a.starts_at AS startsAt,
                     a.duration_minutes AS durationMinutes,
-                    a.description, a.result, a.next_action AS nextAction,
-                    a.next_action_at AS nextActionAt,
+                    a.description, a.result,
+                    COALESCE(na.title, a.next_action) AS nextAction,
+                    COALESCE(na.starts_at, a.next_action_at) AS nextActionAt,
+                    a.source_activity_id AS sourceActivityId,
+                    sa.title AS sourceActivityTitle,
+                    na.id AS nextActivityId,
+                    na.status AS nextActivityStatus,
+                    na.assignee_user_id AS nextActionAssigneeUserId,
+                    nau.full_name AS nextActionAssigneeName,
                     a.free_contact_names AS freeContactNames,
                     a.assignee_user_id AS assigneeUserId,
                     u.full_name AS assigneeName,
@@ -129,6 +136,9 @@ export async function GET() {
              FROM activities a
              JOIN customers c ON c.id = a.customer_id
              JOIN users u ON u.id = a.assignee_user_id
+             LEFT JOIN activities sa ON sa.id = a.source_activity_id
+             LEFT JOIN activities na ON na.source_activity_id = a.id AND na.archived_at IS NULL
+             LEFT JOIN users nau ON nau.id = na.assignee_user_id
              WHERE a.archived_at IS NULL
                AND (a.assignee_user_id = ? OR a.created_by = ? OR ? = 1)
                AND (? = 1 OR a.is_manager_private = 0)

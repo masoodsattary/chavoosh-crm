@@ -83,6 +83,8 @@ export async function GET() {
                 a.duration_minutes AS "مدت به دقیقه", a.description AS "شرح مذاکره",
                 a.result AS "نتیجه", a.next_action AS "اقدام بعدی",
                 a.next_action_at AS "تاریخ اقدام بعدی",
+                a.source_activity_id AS "شناسه فعالیت مبدأ",
+                source_activity.title AS "فعالیت مبدأ",
                 a.free_contact_names AS "نام مخاطبان آزاد",
                 a.assignee_user_id AS "شناسه مسئول", assignee.full_name AS "مسئول",
                 a.is_manager_private AS "خصوصی مدیران",
@@ -93,6 +95,7 @@ export async function GET() {
          FROM activities a
          LEFT JOIN customers c ON c.id = a.customer_id
          LEFT JOIN opportunities o ON o.id = a.opportunity_id
+         LEFT JOIN activities source_activity ON source_activity.id = a.source_activity_id
          LEFT JOIN users assignee ON assignee.id = a.assignee_user_id
          LEFT JOIN users creator ON creator.id = a.created_by
          LEFT JOIN users editor ON editor.id = a.updated_by
@@ -151,6 +154,7 @@ export async function GET() {
                 a.title AS "فعالیت", d.opportunity_id AS "شناسه فرصت",
                 o.title AS "فرصت", d.title AS "عنوان سند",
                 d.document_type AS "نوع سند", d.version AS "نسخه",
+                d.visibility AS "کاربرد سند",
                 d.document_date AS "تاریخ سند", d.reference_number AS "شماره مرجع",
                 d.description AS "شرح", d.file_name AS "نام فایل",
                 d.object_key AS "شناسه فایل ذخیره‌شده",

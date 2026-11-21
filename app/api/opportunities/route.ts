@@ -59,6 +59,7 @@ export async function POST(request: Request) {
       .run();
     const id = Number(result.meta.last_row_id);
     await syncSteps(id, body.steps, user.id);
+    await syncDocumentLinks(id, customerId, body.documentIds, user.id);
     await recordAudit(user, "opportunity", id, "create", "", body);
     await recordEvent({
       customerId,
@@ -134,6 +135,10 @@ export async function PATCH(request: Request) {
         .bind(id)
         .run();
       await syncSteps(id, body.steps, user.id);
+    }
+    if (Array.isArray(body.documentIds)) {
+      await runtime().DB.prepare("DELETE FROM document_links WHERE entity_type = 'opportunity' AND entity_id = ?").bind(id).run();
+      await syncDocumentLinks(id, customerId, body.documentIds, user.id);
     }
     const statusChanged = status !== String(before.status);
     const stageChanged = stage !== String(before.current_stage);
@@ -223,6 +228,19 @@ async function syncSteps(opportunityId: number, raw: unknown, actorId: number) {
         Number.isFinite(Number(step.probability)) ? Number(step.probability) : null,
       )
       .run();
+  }
+}
+
+async function syncDocumentLinks(opportunityId: number, customerId: number, raw: unknown, actorId: number) {
+  if (!Array.isArray(raw)) return;
+  for (const value of [...new Set(raw.map(optionalInt).filter(Boolean) as number[])]) {
+    await runtime().DB.prepare(`INSERT OR IGNORE INTO document_links (document_id, entity_type, entity_id, customer_id, created_by)
+      SELECT d.id, 'opportunity', ?, ?, ? FROM documents d
+      WHERE d.id = ? AND d.archived_at IS NULL AND (
+        d.visibility = 'public' OR EXISTS (
+          SELECT 1 FROM document_links dl WHERE dl.document_id = d.id AND dl.customer_id = ?
+        )
+      )`).bind(opportunityId, customerId, actorId, value, customerId).run();
   }
 }
 
